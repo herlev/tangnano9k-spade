@@ -1,0 +1,45 @@
+use lib::uart::uart_tx;
+use lib::uart::uart_rx;
+
+
+#[no_mangle]
+entity main(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+tx: &mut bool,
+#[no_mangle]
+rx: bool,
+#[no_mangle]
+btn1: bool,
+#[no_mangle]
+led: &mut uint<6>
+) {
+    let arr = [0x41, 0x42, 0x43, 0x44];
+    let t = 27000000;
+    let t_half = t / 2;
+    reg(clk) counter: uint<25> = {
+        match counter == t {
+            true => 0,
+            false => trunc(counter + 1)
+        }
+    };
+
+    reg(clk) tx_en = counter == 0;
+
+    reg(clk) tx_byte_i = {
+        match (counter==t, tx_byte_i) {
+            (true, 3) => 0,
+            (true, _) => trunc(tx_byte_i + 1),
+            _ => tx_byte_i,
+        }
+    };
+    
+    let (tx1, tx_ready) = inst uart_tx(clk, arr[tx_byte_i], tx_en);
+	let (rx_byte, rx_ready) = inst uart_rx(clk, rx);
+
+	reg(clk) byte: uint<6> = if rx_ready trunc(rx_byte) else byte;
+	set led = ~byte;
+
+    set tx = tx1;
+}

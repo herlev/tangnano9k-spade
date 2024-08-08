@@ -1,0 +1,8 @@
+name = "main"
+
+[synthesis]
+top = "main"
+command = "synth_gowin"
+
+[simulation]
+testbench_dir = "test"

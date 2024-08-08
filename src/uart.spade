@@ -1,0 +1,97 @@
+// we are using 8N1
+
+enum rx_state {
+	idle,
+	start_bit{duration: uint<10>},
+	rx{bit: uint<3>, duration: uint<10>},
+	stop_bit{duration: uint<10>}
+}
+
+// TODO: maybe change duration to time_left?
+// TODO: make the modules generic for custom baudrates
+// TODO: error handling check that start bit is low at t=t_bit_half otherwise go to idle
+
+entity uart_rx(clk: clock, rx: bool) -> (uint<8>, bool) {
+	let t_bit = 234;
+	let t_bit_half = t_bit / 2;
+
+    reg(clk) rst initial(true) = false;
+	reg(clk) state reset(rst: rx_state::idle) = match state {
+		rx_state::idle => match rx {
+			true => rx_state::idle,
+			false => rx_state::start_bit(1),
+		},
+        rx_state::start_bit(duration) => match duration == t_bit_half {
+            true => rx_state::rx(0, 1),
+            false => rx_state::start_bit(trunc(duration+1)),
+        },
+        rx_state::rx(bit, duration) => match (bit, duration == t_bit) {
+            (7, true) => {
+                rx_state::stop_bit(1)  
+             },
+             (_, true) => rx_state::rx(trunc(bit+1), 1),
+             _ => rx_state::rx(bit, trunc(duration+1)),
+        },
+        rx_state::stop_bit(duration) => match duration == t_bit {
+            true => rx_state::idle,
+            false => rx_state::stop_bit(trunc(duration+1)),
+        },
+	};
+    
+    reg(clk) rx_byte: uint<8> reset(rst: 0) = match state {
+        rx_state::rx(_, duration) => if duration == t_bit {(if rx {1 << 7} else {0 << 7}) | (rx_byte >> 1)} else {rx_byte},
+        _ => rx_byte,
+    };
+
+    reg(clk) rx_ready reset(rst: false) = match state {
+        rx_state::stop_bit(duration) => duration == t_bit && rx,
+        _ => false,
+    };
+
+    // TODO: differentiate between rx_byte (output) and rx_byte_shift (shift register)
+
+    (rx_byte, rx_ready)
+}
+
+enum tx_state {
+    idle{tx_en_was_false: bool},
+    start_bit{duration: uint<10>},
+    tx{bit: uint<3>, duration: uint<10>},
+    stop_bit{duration: uint<10>}
+}
+
+entity uart_tx(clk: clock, tx_byte: uint<8>, tx_en: bool) -> (bool, bool) {
+    let t_bit = 234; // 27MHz / 115200
+    reg(clk) rst initial(true) = false;
+    reg(clk) state reset(rst: tx_state::idle(false)) = match state {
+        tx_state::idle(tx_en_was_false) => match (tx_en_was_false, tx_en) {
+            (true, true) => tx_state::start_bit(1),
+            (false, false) => tx_state::idle(true),
+            (_, _) => tx_state::idle(tx_en_was_false),
+        },
+        tx_state::start_bit(duration) => match duration == t_bit {
+            true => tx_state::tx(0, 1),
+            false => tx_state::start_bit(trunc(duration+1))
+        },
+        tx_state::tx(bit, duration) => {
+            let duration_done = duration == t_bit;
+            match (bit, duration_done) {
+                (7, true) => tx_state::stop_bit(1),
+                (_, true) => tx_state::tx(trunc(bit+1), 1),
+                (_, _) => tx_state::tx(bit, trunc(duration+1))
+            }
+        },
+        tx_state::stop_bit(duration) => match duration == t_bit {
+            true => tx_state::idle(false),
+            false => tx_state::stop_bit(trunc(duration+1))
+        }
+    };
+    let tx = match state {
+        tx_state::idle(_) => true,
+        tx_state::start_bit(_) => false,
+        tx_state::stop_bit(_) => true,
+        tx_state::tx(bit, _) => std::conv::uint_to_bits(tx_byte)[bit]
+    };
+    let tx_ready = match state { tx_state::idle(_) => true, _ => false };
+    (tx, tx_ready)
+}
