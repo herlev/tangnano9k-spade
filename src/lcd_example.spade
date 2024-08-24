@@ -1,0 +1,23 @@
+#[no_mangle]
+entity main(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+lcd_data: &mut bool,
+#[no_mangle]
+lcd_rs: &mut bool,
+#[no_mangle]
+lcd_cs: &mut bool,
+#[no_mangle]
+lcd_clk: &mut bool,
+#[no_mangle]
+lcd_resetn: &mut bool,
+)  {
+  reg(clk) rst initial(true) = false;
+  let LCDOut(lcd_datar, lcd_rsr, lcd_csr, lcd_clkr, lcd_rst) = inst lcd(rst, clk);
+  set lcd_data = lcd_datar;
+  set lcd_cs = lcd_csr;
+  set lcd_resetn = lcd_rst;
+  set lcd_rs = lcd_rsr;
+  set lcd_clk = lcd_clkr;
+}

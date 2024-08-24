@@ -1,0 +1,49 @@
+use lib::uart::uart_tx;
+use lib::uart::uart_rx;
+
+// This example prints the characters A, B, C, D over the UART module connected to the USB-C plug
+// at a baudrate of 115200, while writing the 5 least significant bits of any bytes it receives
+// to the on-board LEDs
+
+#[no_mangle]
+entity uart_example(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+tx: &mut bool,
+#[no_mangle]
+rx: bool,
+#[no_mangle]
+btn1: bool,
+#[no_mangle]
+led: &mut uint<6>,
+) {
+  let arr = [0x41, 0x42, 0x43, 0x44]; // A B C D
+  let t = 27000000;
+  reg(clk) counter: uint<25> = {
+      match counter == t {
+          true => 0,
+          false => trunc(counter + 1)
+      }
+  };
+
+  reg(clk) tx_byte_i = {
+      match (counter==t, tx_byte_i) {
+          (true, 3) => 0,
+          (true, _) => trunc(tx_byte_i + 1),
+          _ => tx_byte_i,
+      }
+  };
+
+  reg(clk) tx_en = counter == 0;
+  let lib::uart::TxOut(tx1, tx_ready) = inst uart_tx(clk, if tx_en Some(arr[tx_byte_i]) else None);
+  let lib::uart::RxOut(rx_byte, rx_ready) = inst uart_rx(clk, rx);
+
+  reg(clk) byte: uint<6> = if rx_ready trunc(rx_byte) else byte;
+  set led = ~byte;
+  set tx = tx1;
+}
+
+
+
+

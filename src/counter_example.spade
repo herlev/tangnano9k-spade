@@ -1,0 +1,15 @@
+#[no_mangle]
+entity counter_example(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+led: &mut uint<6>
+)  {
+    let N: uint<24> = 1350000;
+    reg(clk) cc: uint<24> =  if cc == N { 0 } else { trunc(cc+1) } ;
+
+    reg(clk) count: uint<6> =  if cc == N { trunc(count + 1) } else { count };
+
+    set led = ~count;
+}
+
