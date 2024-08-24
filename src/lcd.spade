@@ -130,7 +130,14 @@ entity lcd(rst: bool, clk: clock) -> LCDOut {
 
 	// color format
 	// 0b rrrr rggg gggb bbbb 
-	let c: uint<16> = 0b1111100000000000;
+	let c1: uint<16> = 0b1111100000000000;
+	// let c2: uint<16> = 0b0000000000011111;
+	let c2: uint<16> = 0b0000011111100000;
+
+	let c = match state {
+		lcd_state::send_pixels(_, pixel_count) => if pixel_count > 16000 {c2} else {c1},
+		_ => c1,
+	};
 
 	let tx_byte = match state {
 		lcd_state::init_wakeup => Some(0x11),
@@ -150,13 +157,11 @@ entity lcd(rst: bool, clk: clock) -> LCDOut {
 		_ => true,
 	};
 
-	reg(clk) myvar = spi_ready_pulse; // when it's working try to see if this is necessary
-
 	let lcd_cs = match state {
 		lcd_state::init_reset(_) => true,
 		lcd_state::init_wakeup => false,
-		lcd_state::send_pixels(byte_num, _) => myvar && (byte_num == 0),
-		lcd_state::init(_) => myvar,
+		lcd_state::send_pixels(_, _) => false,
+		lcd_state::init(_) => false,
 		_ => true,
 	};
 
