@@ -1,72 +1,72 @@
 
 // idle state of clock
 enum clock_polarity {
-	low,
-	high,
+  low,
+  high,
 }
 
 // when is data sampled?
 enum clock_phase {
-	leading, // cpha=0
-	trailing, // cpha=1
+  leading, // cpha=0
+  trailing, // cpha=1
 }
 
 // what bit is sent first?
 enum data_order {
-	lsb,
-	msb,
+  lsb,
+  msb,
 }
 
 enum state {
-	idle,
-	transmitting{bit: uint<3>, sclk: bool, byte: uint<9>}
+  idle,
+  transmitting{bit: uint<3>, sclk: bool, byte: uint<9>}
 }
 
 struct SPIMasterOut {
-	byte: Option<uint<8>>,
-	ready: bool,
-	sclk: bool, // sclk will be at a speed of clk/2
-	mosi: bool,
+  byte: Option<uint<8>>,
+  ready: bool,
+  sclk: bool, // sclk will be at a speed of clk/2
+  mosi: bool,
 }
 
 // TODO: make configuration of this entity possible using the enums above
 // the current hardcoded config is the following:
-	// cpol=high, cpha=trailing
-	// data set on falling edge
-	// sampled on rising
+  // cpol=high, cpha=trailing
+  // data set on falling edge
+  // sampled on rising
 
 entity spi_master(clk: clock, tx_byte: Option<uint<8>>, miso: bool) -> SPIMasterOut {
-	reg(clk) rst initial(true) = false;
+  reg(clk) rst initial(true) = false;
 
-	reg(clk) state reset(rst: state::idle) = match (state, tx_byte) {
-		(state::idle, None) => state::idle,
-		(state::idle, Some(byte)) => state::transmitting(0, false, byte `concat` 0b0),
-		(state::transmitting(bit, sclk, byte), _) => match (bit == 7, sclk) {
-			(true, true) => state::idle,
-			(_, true) => state::transmitting(trunc(bit+1), !sclk, byte << 1), // falling edge
-			(_, false) => state::transmitting(bit, !sclk, byte | zext(std::conv::bits_to_uint([miso]))), // rising-edge
-		},
-	};
+  reg(clk) state reset(rst: state::idle) = match (state, tx_byte) {
+    (state::idle, None) => state::idle,
+    (state::idle, Some(byte)) => state::transmitting(0, false, byte `concat` 0b0),
+    (state::transmitting(bit, sclk, byte), _) => match (bit == 7, sclk) {
+      (true, true) => state::idle,
+      (_, true) => state::transmitting(trunc(bit+1), !sclk, byte << 1), // falling edge
+      (_, false) => state::transmitting(bit, !sclk, byte | zext(std::conv::bits_to_uint([miso]))), // rising-edge
+    },
+  };
 
-	let mosi = match state {
-		state::idle => true,
-		state::transmitting(_, _, byte) => std::conv::uint_to_bits(byte)[8]
-	};
+  let mosi = match state {
+    state::idle => true,
+    state::transmitting(_, _, byte) => std::conv::uint_to_bits(byte)[8]
+  };
 
-	let sclk = match state {
-		state::idle => true,
-		state::transmitting(_, sclk, _) => sclk,
-	};
+  let sclk = match state {
+    state::idle => true,
+    state::transmitting(_, sclk, _) => sclk,
+  };
 
-	let ready = match state {
-		state::transmitting(bit, sclk, _) => bit == 7 && sclk,
-		state::idle => true,
-	};
+  let ready = match state {
+    state::transmitting(bit, sclk, _) => bit == 7 && sclk,
+    state::idle => true,
+  };
 
-	let rx_byte = match state {
-		state::transmitting(bit, sclk, byte) => if bit == 7 && sclk {Some(trunc(byte))} else {None},
-		_ => None,
-	};
-	
-	SPIMasterOut(rx_byte, ready, sclk, mosi)
+  let rx_byte = match state {
+    state::transmitting(bit, sclk, byte) => if bit == 7 && sclk {Some(trunc(byte))} else {None},
+    _ => None,
+  };
+  
+  SPIMasterOut(rx_byte, ready, sclk, mosi)
 }
