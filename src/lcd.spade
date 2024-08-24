@@ -1,0 +1,223 @@
+// http://www.lcdwiki.com/res/MSP1141/ST7789VW_datasheet.pdf
+// based on https://github.com/sipeed/TangNano-9K-example/blob/main/spi_lcd/src/top.v
+
+use lib::spi::spi_master;
+use lib::spi::SPIMasterOut;
+
+enum lcd_state {
+	init_reset{time_left: uint<32>},
+	init_prepare{time_left: uint<32>},
+	init_wakeup,
+	init_snooze{time_left: uint<32>},
+	init{cmd_num: uint<7>},
+	send_pixels{byte_count: uint<1>, pixel_num: uint<15>},
+	initialized
+}
+
+struct LCDOut {
+	lcd_data: bool,
+	lcd_rs: bool,
+	lcd_cs: bool,
+	lcd_clk: bool,
+	lcd_rst: bool,
+}
+
+// MSB=1: data
+// MSB=0: command
+
+// maybe make screen size generic?
+entity lcd(rst: bool, clk: clock) -> LCDOut {
+	let init_cmds: [uint<9>; 70] = [
+		0x036, // MADCTL (36h): Memory Data Access Control
+		0x170, // right-to-left, reverse-mode, refresh-lcd-bottom-to-top
+		0x03A, // COLMOD (3Ah): Interface Pixel Format
+		0x105, // 16 bit/pixel
+		0x0B2, // PORCTRL (B2h): Porch Setting
+		0x10C, // Power on sequence: 0Ch/0Ch/00h/33h/33h
+		0x10C, // ^^
+		0x100, // ^^
+		0x133, // ^^
+		0x133, // ^^
+		0x0B7, // GCTRL (B7h): Gate Control
+		0x135, // Power on sequence: 35h
+		0x0BB, // VCOMS (BBh): VCOM Setting
+		0x119, // VCOM=0.725V
+		0x0C0, // LCMCTRL (C0h): LCM Control
+		0x12C, // Power on sequence: 2Ch
+		0x0C2, // VDVVRHEN (C2h): VDV and VRH Command Enable
+		0x101, // Power on sequence: 01h. CMDEN=”1”, VDV and VRH register value comes from command write.
+		0x0C3, // VRHS (C3h): VRH Set
+		0x112, // VAP = (4.45+( vcom+vcom offset+vdv))V, VAN = (-4.45+( vcom+vcom offset-vdv))V
+		0x0C4, // VDVS (C4h): VDV Set
+		0x120, // Power on sequence: 20h
+		0x0C6, // FRCTRL2 (C6h): Frame Rate Control in Normal Mode
+		0x10F, // Power on sequence: 0Fh. FPS=60
+		0x0D0, // PWCTRL1 (D0h): Power Control 1
+		0x1A4, // Power on sequence: A4h/A1h
+		0x1A1, // ^^
+		0x0E0, // PVGAMCTRL (E0h): Positive Voltage Gamma Control
+		0x1D0, // idk vv (14 parameters)
+		0x104,
+		0x10D,
+		0x111,
+		0x113,
+		0x12B,
+		0x13F,
+		0x154,
+		0x14C,
+		0x118,
+		0x10D,
+		0x10B,
+		0x11F,
+		0x123,
+		0x0E1, // NVGAMCTRL (E1h): Negative Voltage Gamma Contro
+		0x1D0, // again idk, still 14 parameters
+		0x104,
+		0x10C,
+		0x111,
+		0x113,
+		0x12C,
+		0x13F,
+		0x144,
+		0x151,
+		0x12F,
+		0x11F,
+		0x11F,
+		0x120,
+		0x123,
+		0x021, // INVON (21h): Display Inversion On
+		0x029, // DISPON (29h): Display On
+		0x02A, // CASET (2Ah): Column Address Set
+		0x100, // 40 -- 279 (range of 240 numbers)
+		0x128, // ^^
+		// 0x100, // ^^
+		// 0x159, // ^^
+		0x101,
+		0x117,
+		0x02B, // RASET (2Bh): Row Address Set
+		0x100, // 53 -- 187 (range of 135 numbers)
+		0x135, // ^^
+		0x100, // ^^
+		0x1BB, // ^^
+		0x02C, // RAMWR (2Ch): Memory Write. This command is used to transfer data from MCU to frame memory.
+	];
+
+	let cnt_100ms = 2700000-1;
+	let cnt_120ms = 3240000-1;
+	let cnt_200ms = 5400000-1;
+	// let cnt_100ms = 100-1;
+	// let cnt_120ms = 120-1;
+	// let cnt_200ms = 200-1;
+
+	decl ready;
+    let spi_ready_pulse = inst std::io::rising_edge(clk, ready);
+
+	reg(clk) state reset(rst: lcd_state::init_reset(cnt_100ms)) = match state {
+		lcd_state::init_reset(0) => lcd_state::init_prepare(cnt_200ms),
+		lcd_state::init_prepare(0) => lcd_state::init_wakeup, // this needs to depend on spi data
+		lcd_state::init_wakeup => if spi_ready_pulse {lcd_state::init_snooze(cnt_120ms)} else {lcd_state::init_wakeup},
+		lcd_state::init_snooze(0) => lcd_state::init(0),
+		lcd_state::init_reset(t) => lcd_state::init_reset(trunc(t-1)),
+		lcd_state::init_prepare(t) => lcd_state::init_prepare(trunc(t-1)),
+		lcd_state::init_snooze(t) => lcd_state::init_snooze(trunc(t-1)),
+		lcd_state::init(69) => if spi_ready_pulse {lcd_state::send_pixels(0, 0)} else {lcd_state::init(69)},
+		lcd_state::init(n) => if spi_ready_pulse {lcd_state::init(trunc(n+1))} else {lcd_state::init(n)},
+		lcd_state::send_pixels(1, 32399) => if spi_ready_pulse {lcd_state::initialized} else {lcd_state::send_pixels(1,32399)},
+		lcd_state::send_pixels(0, pixel_num) => if spi_ready_pulse {lcd_state::send_pixels(1, pixel_num)} else {lcd_state::send_pixels(0,pixel_num)},
+		lcd_state::send_pixels(1, pixel_num) => if spi_ready_pulse {lcd_state::send_pixels(0, trunc(pixel_num+1))} else {lcd_state::send_pixels(1, pixel_num)},
+		lcd_state::initialized => lcd_state::initialized,
+	};
+
+	// color format
+	// 0b rrrr rggg gggb bbbb 
+	let c: uint<16> = 0b1111100000000000;
+
+	let tx_byte = match state {
+		lcd_state::init_wakeup => Some(0x11),
+		lcd_state::init(i) => Some(trunc(init_cmds[i])),
+		lcd_state::send_pixels(byte_count, _) => if byte_count == 0 {Some(trunc(c>>8))} else {Some(trunc(c))},
+		_ => None,
+	};
+
+	let miso = false;
+	let SPIMasterOut(byte, ready, sclk, mosi) = inst spi_master(clk, tx_byte, miso);
+	let lcd_data = mosi;
+	let lcd_clk = sclk;
+
+	let lcd_rs = match state {
+		lcd_state::init(i) => std::conv::uint_to_bits(init_cmds[i])[8],
+		lcd_state::init_wakeup => false,
+		_ => true,
+	};
+
+	reg(clk) myvar = spi_ready_pulse; // when it's working try to see if this is necessary
+
+	let lcd_cs = match state {
+		lcd_state::init_reset(_) => true,
+		lcd_state::init_wakeup => false,
+		lcd_state::send_pixels(byte_num, _) => myvar && (byte_num == 0),
+		lcd_state::init(_) => myvar,
+		_ => true,
+	};
+
+	let lcd_rst = match state {
+		lcd_state::init_reset(_) => false,
+		_ => true,
+	};
+	
+	LCDOut(lcd_data, lcd_rs, lcd_cs, lcd_clk, lcd_rst)
+}
+
+#[no_mangle]
+entity main(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+lcd_data: &mut bool,
+#[no_mangle]
+lcd_rs: &mut bool,
+#[no_mangle]
+lcd_cs: &mut bool,
+#[no_mangle]
+lcd_clk: &mut bool,
+#[no_mangle]
+lcd_resetn: &mut bool,
+)  {
+    reg(clk) rst initial(true) = false;
+	let LCDOut(lcd_datar, lcd_rsr, lcd_csr, lcd_clkr, lcd_rst) = inst lcd(rst, clk);
+	set lcd_data = lcd_datar;
+	set lcd_cs = lcd_csr;
+	set lcd_resetn = lcd_rst;
+	set lcd_rs = lcd_rsr;
+	set lcd_clk = lcd_clkr;
+}
+
+// reset:
+// 	lcd_cs = 1
+// 	lcd_rs = 1
+// 	lcd_reset = 0
+// wait 100ms:
+// 	lcd_reset = 1
+// wait 200ms:
+// 	lcd_cs = 0
+// 	lcd_rs = 0
+// transfer 0x11 over SPI: // exit sleep
+// 	lcd_cs = 1
+// 	lcd_rs = 1
+// wait 120ms:
+
+// for byte in bytes: // init commands
+// 	lcd_cs = 0
+// 	lcd_rs = byte[8]
+// 	transfer byte[7:0]
+// 	lcd_cs = 1
+// 	lcd_rs = 1
+
+// for pixel in pixels:
+// 	lcd_cs = 0
+// 	lcd_rs = 1
+// 	transfer byte[15:8]
+// 	transfer byte[7:0]
+// 	lcd_cs = 1
+// 	lcd_rs = 1
+
