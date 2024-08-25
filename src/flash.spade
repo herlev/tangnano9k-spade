@@ -1,0 +1,86 @@
+use lib::spi::spi_master;
+use lib::spi::SPIMasterOut;
+
+struct FlashOut {
+  ready: bool,
+  sclk: bool,
+  cs: bool,
+  mosi: bool,
+  byte: Option<uint<8>>
+}
+
+enum state {
+  init{time_left: uint<24>},
+  ready,
+  reading{s: reading_state, address: uint<24>},
+}
+
+enum reading_state {
+  init{count: uint<3>}, // send read cmd + address + recv first byte
+  ready,
+  processing,
+}
+
+enum Command {
+  start_read{address: uint<24>}, // cs low, send read cmd, read one byte with spi
+  read_next, // just read one more byte with spi
+  stop_read, // cs high
+}
+
+fn handle_reading(s: reading_state, address: uint<24>, spi_ready_pulse: bool, cmd: Option<Command>) -> state {
+  match (spi_ready_pulse, s, cmd) {
+    (true, reading_state::init(3), _) => state::reading(reading_state::processing, address),
+    (true, reading_state::init(c), _) => state::reading(reading_state::init(trunc(c+1)), address),
+    (true, reading_state::processing, _) => state::reading(reading_state::ready, address),
+    (_, reading_state::ready, Some(Command::read_next)) => state::reading(reading_state::processing, address),
+    (_, reading_state::ready, Some(Command::stop_read)) => state::ready,
+    _ => state::reading(s, address),
+  }
+}
+
+entity flash(clk: clock, rst: bool, cmd: Option<Command>, miso: bool) -> FlashOut {
+  let startup_wait = 10000000;
+  // let startup_wait = 10;
+
+  decl spi_ready;
+  let spi_ready_pulse = inst std::io::rising_edge(clk, spi_ready);
+  reg(clk) state reset(rst: state::init(startup_wait)) = match state {
+    state::init(0) => state::ready,
+    state::init(t) => state::init(trunc(t-1)),
+    state::ready => match cmd {
+      Some(Command::start_read(addr)) => state::reading(reading_state::init(0), addr),
+      _ => state::ready,
+    },
+    state::reading(s, addr) => handle_reading(s, addr, spi_ready_pulse, cmd),
+  };
+
+  let cs = match state {
+    state::reading(_, _) => false,
+    _ => true,
+  };
+
+  let tx_byte = match state {
+    state::reading(reading_state::init(0), _) => Some(0x03),
+    state::reading(reading_state::init(1), addr) => Some(trunc(addr>>16)),
+    state::reading(reading_state::init(2), addr) => Some(trunc(addr>>8)),
+    state::reading(reading_state::init(3), addr) => Some(trunc(addr>>8)),
+    state::reading(reading_state::processing, _) => Some(0xFF),
+    _ => None,
+  };
+
+  let ready = match state {
+    state::ready => true,
+    state::reading(reading_state::ready, _) => true,
+    _ => false,
+  };
+  
+  let SPIMasterOut(spi_byte, spi_ready, sclk, mosi) = inst spi_master$(clk, tx_byte, miso);
+  reg(clk) spi_byte1 reset(rst: None) = spi_byte;
+
+  let byte = match state {
+    state::reading(reading_state::ready, _) => spi_byte1,
+    _ => None
+  };
+  
+  FlashOut$(ready, sclk, cs, mosi, byte)
+}

@@ -1,0 +1,68 @@
+use lib::uart::uart_tx;
+use lib::flash::flash;
+use lib::flash::FlashOut;
+use lib::flash::Command;
+
+enum state {
+  idle,
+  fetching{byte_num: uint<8>},
+}
+
+
+#[no_mangle]
+entity flash_example(
+#[no_mangle]
+clk: clock,
+#[no_mangle]
+tx: &mut bool,
+#[no_mangle]
+flash_clk: &mut bool,
+#[no_mangle]
+flash_miso: bool,
+#[no_mangle]
+flash_mosi: &mut bool,
+#[no_mangle]
+flash_cs: &mut bool,
+) {
+  let t = 27000000;
+  // let t = 20000;
+
+  reg(clk) counter: uint<29> initial(0) = if counter == t 0 else trunc(counter+1);
+  reg(clk) rst initial(true) = false;
+
+  decl tx_ready_pulse;
+  decl flash_ready;
+  reg(clk) state reset(rst: state::idle) = match (tx_ready_pulse, state) {
+    (_, state::idle) => if counter == 0 && flash_ready state::fetching(0) else state::idle,
+    (true, state::fetching(3)) => state::idle,
+    (true, state::fetching(n)) => state::fetching(trunc(n+1)),
+    (_, s) => s,
+  };
+
+  let cmd = match (tx_ready_pulse, state) {
+    (true, state::fetching(3)) => Some(Command::stop_read),
+    (true, state::fetching(n)) => Some(Command::read_next),
+    (_, state::fetching(0)) => Some(Command::start_read(0x000000)),
+    _ => None,
+  };
+
+  // let flash_miso = false;
+  let FlashOut(flash_ready, sclk, cs, mosi, flash_byte) = inst flash(clk, rst, cmd, flash_miso);
+  set flash_clk = sclk;
+  set flash_cs = cs;
+  set flash_mosi = mosi;
+  let tx_byte = flash_byte;
+  let lib::uart::TxOut(tx1, tx_ready) = inst uart_tx(clk, tx_byte);
+  let tx_ready_pulse = inst std::io::rising_edge(clk, tx_ready);
+
+  set tx = tx1;
+}
+
+// start read
+// loop:
+//   print char
+//   wait for uart ready
+//   cmd next
+
+
+
